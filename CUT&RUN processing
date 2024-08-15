@@ -1,0 +1,78 @@
+#!/bin/bash
+
+#modules
+module load trimgalore/0.6.7
+module load fastqc/0.11.9
+module load multiqc/1.14
+module load bowtie/2
+module load samtools/1.19
+module load bedtools/2.30.0
+module load deeptools/3.5.4
+
+#sample names
+samplename='male_Y1_YY1 male_Y1_cebpb male_Y1_igg male_Y2_YY1 male_Y2_cebpb male_Y2_igg male_Y3_YY1 male_Y3_cebpb male_O1_YY1 male_O1_cebpb male_O1_igg male_O2_YY1 male_O2_cebpb male_O3_YY1 male_O3_cebpb female_Y1_YY1 female_Y1_cebpb female_Y2_cebpb female_O1_YY1 female_O1_cebpb female_O1_igg female_O2_YY1 female_O2_cebpb female_O3_YY1 female_O3_igg'
+
+#paths
+path=/data/CUTRUN_WL_spike_P4
+
+INPUT1=$path/fastq
+INPUT2=$path/fastq-trim
+INPUT3=$path/fastq-trim/*fq.gz
+INPUT4=$path/fastqc-trim
+INPUT5=$path/bam-trim-mouse
+OUTPUT1=$path/fastq-trim
+OUTPUT2=$path/fastqc-trim
+OUTPUT3=$path/multiqc-trim
+OUTPUT4=$path/sam-trim-mouse
+OUTPUT5=$path/bam-trim-mouse
+OUTPUT6=$path/bigwig-trim-mouse
+BLACKR=$path/mm10-blacklist.bed.gz
+
+#Create output directories
+mkdir -p $OUTPUT1
+mkdir -p $OUTPUT2
+mkdir -p $OUTPUT3
+mkdir -p $OUTPUT4
+mkdir -p $OUTPUT4/bowtie2_summary
+mkdir -p $OUTPUT5
+mkdir -p $OUTPUT6
+
+#Encode mm10 blacklist file
+wget -O $BLACKR https://www.encodeproject.org/files/ENCFF547MET/@@download/ENCFF547MET.bed.gz
+
+#Trim adaptors using Trim Galore
+for i in $samplename
+do
+    trim_galore --paired ${INPUT1}/${i}_R1.fastq.gz ${INPUT1}/${i}_R2.fastq.gz -o $OUTPUT1
+done
+
+#Perform FastQC on trimmed fastq files
+fastqc -f fastq -o $OUTPUT2 $INPUT3
+
+#Run MultiQC to aggregate FastQC reports
+multiqc -i CUTRUN_WL_YY1_trim -o $OUTPUT3 $INPUT4
+
+#Set Bowtie2 indices path
+export BOWTIE2_INDEXES=/fdb/igenomes/Mus_musculus/UCSC/mm10/Sequence/Bowtie2Index/
+
+#Align sequences with Bowtie2 and process SAM/BAM files using Samtools
+for j in $samplename
+do
+    bowtie2 --local --very-sensitive-local --no-mixed --no-discordant --phred33 --threads=$SLURM_CPUS_PER_TASK -I 10 -X 700 \
+-x genome -1 ${INPUT2}/${j}_R1_val_1.fq.gz -2 ${INPUT2}/${j}_R2_val_2.fq.gz -S ${OUTPUT4}/${j}.sam &> ${OUTPUT4}/bowtie2_summary/${j}.txt
+    samtools view -@ 24 -h -q 2 -bS ${OUTPUT4}/${j}.sam > ${OUTPUT5}/${j}_filtered.bam
+    samtools sort -O BAM -o ${OUTPUT5}/${j}_filtered.sorted.bam ${OUTPUT5}/${j}_filtered.bam
+done
+
+#Remove ENCODE blacklist regions using Bedtools
+for k in $samplename
+do 
+    bedtools intersect -a ${INPUT5}/${k}_filtered.sorted.bam -b $BLACKR -v > ${OUTPUT5}/${k}_filtered.sorted.nobl.bam
+done
+
+# Convert BAM to BigWig using deeptools bamCoverage with RPKM normalization
+for l in $samplename
+do
+    samtools index ${OUTPUT5}/${l}_filtered.sorted.nobl.bam
+    bamCoverage -b ${OUTPUT5}/${l}_filtered.sorted.nobl.bam -o ${OUTPUT6}/${l}.bw --normalizeUsing RPKM -of bigwig -p $SLURM_CPUS_PER_TASK
+done
