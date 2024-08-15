@@ -1,10 +1,5 @@
 #! /bin/bash
 
-#SBATCH --cpus-per-task=36
-#SBATCH --time=8:00:00
-#SBATCH --mem=80g
-#SBATCH --gres=lscratch:80
-
 module load spaceranger 
 
 spaceranger count --id ${sample_directory} \
